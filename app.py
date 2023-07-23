@@ -6,7 +6,7 @@ import ngrok
 parser = argparse.ArgumentParser(description='Refacer')
 parser.add_argument("--max_num_faces", type=int, help="Max number of faces on UI", default=5)
 parser.add_argument("--force_cpu", help="Force CPU mode", default=False, action="store_true")
-parser.add_argument("--share_gradio", help="Share Gradio", default=False, action="store_true")
+parser.add_argument("--share_gradio", help="Share Gradio", default=True, action="store_true")
 parser.add_argument("--server_name", type=str, help="Server IP address", default="127.0.0.1")
 parser.add_argument("--server_port", type=int, help="Server port", default=7860)
 parser.add_argument("--colab_performance", help="Use in colab for better performance", default=False,action="store_true")
@@ -18,7 +18,7 @@ parser.add_argument('--max-memory', help='maximum amount of RAM in GB to be used
 parser.add_argument('--video_quality', help='настроить качество выходного видео', dest='video_quality', type=int, default=30, choices=range(52), metavar='[0-51]')
 args = parser.parse_args()
 
-refacer = Refacer(force_cpu=args.force_cpu,colab_performance=args.colab_performance)
+refacer = Refacer(force_cpu=args.force_cpu,tensorrt=args.tensorrt,gpu_threads=args.gpu_threads,max_memory=args.max_memory,video_quality=args.video_quality)
 
 num_faces=args.max_num_faces
 
