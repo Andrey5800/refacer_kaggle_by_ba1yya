@@ -1,3 +1,4 @@
+п»ї# -*- coding: utf-8 -*-
 import gradio as gr
 from refacer import Refacer
 import argparse
@@ -71,18 +72,18 @@ with gr.Blocks() as demo:
     with gr.Row():
         gr.Markdown("# Refacer by ba1yya https://www.youtube.com/@ba1yya")
     with gr.Row():
-        video=gr.Video(label="Оригинальное видео, формат mp4",format="mp4")
-        video2=gr.Video(label="Refaced видео",interactive=False,format="mp4")
+        video=gr.Video(label=u"РћСЂРёРіРёРЅР°Р»СЊРЅРѕРµ РІРёРґРµРѕ, С„РѕСЂРјР°С‚ mp4",format="mp4")
+        video2=gr.Video(label=u"Refaced РІРёРґРµРѕ",interactive=False,format="mp4")
 
     for i in range(0,num_faces):
-        with gr.Tab(f"Лицо #{i+1}"):
+        with gr.Tab(u"Р›РёС†Рѕ #{i+1}"):
             with gr.Row():
-                origin.append(gr.Image(label="Лицо которое заменяем"))
-                destination.append(gr.Image(label="На какое заменяем"))
+                origin.append(gr.Image(label=u"Р›РёС†Рѕ РєРѕС‚РѕСЂРѕРµ Р·Р°РјРµРЅСЏРµРј"))
+                destination.append(gr.Image(label=u"РќР° РєР°РєРѕРµ Р·Р°РјРµРЅСЏРµРј"))
             with gr.Row():
-                thresholds.append(gr.Slider(label="Прозрачность",minimum=0.0,maximum=1.0,value=0.2))
+                thresholds.append(gr.Slider(label=u"РџСЂРѕР·СЂР°С‡РЅРѕСЃС‚СЊ",minimum=0.0,maximum=1.0,value=0.2))
     with gr.Row():
-        button=gr.Button("Начать обработку", variant="primary")
+        button=gr.Button(u"РќР°С‡Р°С‚СЊ РѕР±СЂР°Р±РѕС‚РєСѓ", variant="primary")
 
     button.click(fn=run,inputs=[video]+origin+destination+thresholds,outputs=[video2])
     
