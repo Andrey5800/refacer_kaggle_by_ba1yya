@@ -12,13 +12,9 @@ parser.add_argument("--server_port", type=int, help="Server port", default=7860)
 parser.add_argument("--colab_performance", help="Use in colab for better performance", default=False,action="store_true")
 parser.add_argument("--ngrok", type=str, help="Use ngrok", default=None)
 parser.add_argument("--ngrok_region", type=str, help="ngrok region", default="us")
-parser.add_argument("--tensorrt", help="TensorRT activate", default=True,action="store_true")
-parser.add_argument("--gpu-threads", help="number of threads to be use for the GPU", dest="gpu_threads", type=int, default=10)
-parser.add_argument('--max-memory', help='maximum amount of RAM in GB to be used', dest='max_memory', type=int, default=10000)
-parser.add_argument('--video_quality', help='video quality', dest='video_quality', type=int, default=30, choices=range(52), metavar='[0-51]')
 args = parser.parse_args()
 
-refacer = Refacer(force_cpu=args.force_cpu,tensorrt=args.tensorrt,gpu_threads=args.gpu_threads,max_memory=args.max_memory,video_quality=args.video_quality)
+refacer = Refacer(force_cpu=args.force_cpu,colab_performance=args.colab_performance)
 
 num_faces=args.max_num_faces
 
