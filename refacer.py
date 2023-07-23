@@ -7,6 +7,7 @@ from scrfd import SCRFD
 from arcface_onnx import ArcFaceONNX
 import os.path as osp
 import os
+import platform
 from pathlib import Path
 from tqdm import tqdm
 import ffmpeg
@@ -19,19 +20,29 @@ from enum import Enum
 from insightface.app.common import Face
 from insightface.utils.storage import ensure_available
 import re
+import argparse
 import subprocess
+
+import numpy as np
+from esrgan_onnx import ESRGAN
+from gfpgan_onnx import GFPGAN
+
 
 class RefacerMode(Enum):
      CPU, CUDA, COREML, TENSORRT = range(1, 5)
 
 class Refacer:
-    def __init__(self,force_cpu=False,colab_performance=False):
+    def __init__(self,force_cpu=False,tensorrt=False,gpu_threads=4,max_memory=8000,video_quality=18):
         self.first_face = False
         self.force_cpu = force_cpu
-        self.colab_performance = colab_performance
+        self.gpu_threads = gpu_threads
+        self.max_memory = max_memory
+        self.tensorrt = tensorrt
+        self.video_quality = video_quality
         self.__check_encoders()
         self.__check_providers()
-        self.total_mem = psutil.virtual_memory().total
+        self.__limit_resources()
+        self.total_mem = self.__limit_resources() #psutil.virtual_memory().total
         self.__init_apps()
 
     def __check_providers(self):
@@ -41,28 +52,52 @@ class Refacer:
             self.providers = rt.get_available_providers()
         rt.set_default_logger_severity(4)
         self.sess_options = rt.SessionOptions()
-        self.sess_options.execution_mode = rt.ExecutionMode.ORT_SEQUENTIAL
+        self.sess_options.execution_mode = rt.ExecutionMode.ORT_PARALLEL
         self.sess_options.graph_optimization_level = rt.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        # Get the number of threads from the argument parser
 
         if len(self.providers) == 1 and 'CPUExecutionProvider' in self.providers:
             self.mode = RefacerMode.CPU
             self.use_num_cpus = mp.cpu_count()-1
             self.sess_options.intra_op_num_threads = int(self.use_num_cpus/3)
             print(f"CPU mode with providers {self.providers}")
-        elif self.colab_performance:
+        elif self.tensorrt:
             self.mode = RefacerMode.TENSORRT
-            self.use_num_cpus = mp.cpu_count()-1
+            self.providers = [
+            ('TensorrtExecutionProvider', {
+             'trt_engine_cache_enable': True,
+             'trt_engine_cache_path':'./trtcache',
+            })
+        ]
+            self.use_num_cpus = self.gpu_threads
             self.sess_options.intra_op_num_threads = int(self.use_num_cpus/3)
             print(f"TENSORRT mode with providers {self.providers}")
         elif 'CoreMLExecutionProvider' in self.providers:
             self.mode = RefacerMode.COREML
-            self.use_num_cpus = mp.cpu_count()-1
+            self.use_num_cpus = self.gpu_threads
             self.sess_options.intra_op_num_threads = int(self.use_num_cpus/3)
             print(f"CoreML mode with providers {self.providers}")
         elif 'CUDAExecutionProvider' in self.providers:
             self.mode = RefacerMode.CUDA
-            self.use_num_cpus = 2
-            self.sess_options.intra_op_num_threads = 1
+            self.providers = [
+            #('TensorrtExecutionProvider', {
+            # 'device_id': 0,
+            # 'trt_max_workspace_size': 2147483648,
+            # 'trt_fp16_enable': True,
+            # 'trt_engine_cache_enable': True,
+            # 'trt_engine_cache_path':'./trtcache',
+            #}),
+            ('CUDAExecutionProvider', {
+                'tunable_op_enable': 1, 
+                'tunable_op_tuning_enable': 1,
+                'cudnn_conv1d_pad_to_nc1d': 1,
+                'cudnn_conv_algo_search': 'EXHAUSTIVE',
+            })
+        ]
+            self.use_num_cpus = self.gpu_threads
+            self.sess_options.intra_op_num_threads = self.gpu_threads
+            print(f"Total CUDA threads: {self.use_num_cpus}")
             if 'TensorrtExecutionProvider' in self.providers:
                 self.providers.remove('TensorrtExecutionProvider')
             print(f"CUDA mode with providers {self.providers}")
@@ -75,7 +110,6 @@ class Refacer:
             self.sess_options.intra_op_num_threads = int(self.use_num_cpus/3)
             print(f"TENSORRT mode with providers {self.providers}")
         """
-        
 
     def __init_apps(self):
         assets_dir = ensure_available('models', 'buffalo_l', root='~/.insightface')
@@ -93,6 +127,9 @@ class Refacer:
         model_path = 'inswapper_128.onnx'
         sess_swap = rt.InferenceSession(model_path, self.sess_options, providers=self.providers)
         self.face_swapper = INSwapper(model_path,sess_swap)
+        self.face_swapper_input_size = self.face_swapper.input_size[0]
+        #print("INSwapper resolution = ",self.face_swapper_input_size)
+
 
     def prepare_faces(self, faces):
         self.replacement_faces=[]
@@ -122,7 +159,7 @@ class Refacer:
             #stream = ffmpeg.input(output_video_path)
             in1 = ffmpeg.input(output_video_path)
             in2 = ffmpeg.input(video_path)
-            out = ffmpeg.output(in1.video, in2.audio, new_path,video_bitrate=self.ffmpeg_video_bitrate,vcodec=self.ffmpeg_video_encoder)
+            out = ffmpeg.output(in1.video, in2.audio, new_path,video_bitrate=self.ffmpeg_video_bitrate,vcodec=self.ffmpeg_video_encoder, **{'crf': self.video_quality})
             out.run(overwrite_output=True,quiet=True)
         else:
             new_path = output_video_path
@@ -130,11 +167,9 @@ class Refacer:
         
         print(f"The process has finished.\nThe refaced video can be found at {os.path.abspath(new_path)}")
         return new_path
-
+    
     def __get_faces(self,frame,max_num=0):
-
         bboxes, kpss = self.face_detector.detect(frame,max_num=max_num,metric='default')
-
         if bboxes.shape[0] == 0:
             return []
         ret = []
@@ -149,10 +184,58 @@ class Refacer:
             ret.append(face)
         return ret
 
+    def paste_upscale(self, bgr_fake, M, img):
+        upsk_face, self.scale_factor = self.face_upscaler_model.get(bgr_fake)
+        M_scale = M * self.scale_factor
+        target_img = img
+        IM = cv2.invertAffineTransform(M_scale)
+
+        face_matte = np.full((target_img.shape[0],target_img.shape[1]), 255, dtype=np.uint8)
+
+        ##Generate white square sized as a upsk_face
+        img_matte = np.full((upsk_face.shape[0],upsk_face.shape[1]), 255, dtype=np.uint8) 
+        ##Transform white square back to target_img
+        img_matte = cv2.warpAffine(img_matte, IM, (target_img.shape[1], target_img.shape[0]), flags=cv2.INTER_NEAREST, borderValue=0.0) 
+        ##Blacken the edges of face_matte by 1 pixels (so the mask in not expanded on the image edges)
+        img_matte[:1,:] = img_matte[-1:,:] = img_matte[:,:1] = img_matte[:,-1:] = 0 
+        #Detect the affine transformed white area
+        mask_h_inds, mask_w_inds = np.where(img_matte==255) 
+        #Calculate the size (and diagonal size) of transformed white area width and height boundaries
+        mask_h = np.max(mask_h_inds) - np.min(mask_h_inds) 
+        mask_w = np.max(mask_w_inds) - np.min(mask_w_inds)
+        mask_size = int(np.sqrt(mask_h*mask_w))
+        #Calculate the kernel size for eroding img_matte by kernel (insightface empirical guess for best size was max(mask_size//10,10))
+        k = max(mask_size//12, 8)
+        kernel = np.ones((k,k),np.uint8)
+        img_matte = cv2.erode(img_matte,kernel,iterations = 1)
+        #Calculate the kernel size for blurring img_matte by blur_size (insightface empirical guess for best size was max(mask_size//20, 5))
+        k = max(mask_size//24, 4) 
+        kernel_size = (k, k)
+        blur_size = tuple(2*i+1 for i in kernel_size)
+        img_matte = cv2.GaussianBlur(img_matte, blur_size, 0)
+
+        #Normalize images to float values and reshape
+        img_matte = img_matte.astype(np.float32)/255
+        face_matte = face_matte.astype(np.float32)/255
+        img_matte = np.minimum(face_matte, img_matte)
+        img_matte = np.reshape(img_matte, [img_matte.shape[0],img_matte.shape[1],1]) 
+        ##Transform upcaled face back to target_img
+        paste_face = cv2.warpAffine(upsk_face, IM, (target_img.shape[1], target_img.shape[0]), borderMode=cv2.BORDER_REPLICATE) 
+        ##Re-assemble image
+        paste_face = img_matte * paste_face
+        paste_face = paste_face + (1-img_matte) * target_img.astype(np.float32) 
+        return paste_face.astype(np.uint8)
+        
     def process_first_face(self,frame):
         faces = self.__get_faces(frame,max_num=1)
         if len(faces) != 0:
-            frame = self.face_swapper.get(frame, faces[0], self.replacement_faces[0][1], paste_back=True)
+            if not self.upscale_en: 
+                #print('\nRun native paste_back')
+                frame = self.face_swapper.get(frame, faces[0], self.replacement_faces[0][1], paste_back=True)
+            else: 
+                #print('\nRun upscale')
+                bgr_fake, M = self.face_swapper.get(frame, faces[0], self.replacement_faces[0][1], paste_back=False)
+                frame = self.paste_upscale(bgr_fake,M,frame)
         return frame
 
     def process_faces(self,frame):
@@ -161,7 +244,13 @@ class Refacer:
             for i in range(len(faces) - 1, -1, -1):
                 sim = self.rec_app.compute_sim(rep_face[0], faces[i].embedding)
                 if sim>=rep_face[2]:
-                    frame = self.face_swapper.get(frame, faces[i], rep_face[1], paste_back=True)
+                    if not self.upscale_en: 
+                        #print('\nRun native paste_back')
+                        frame = self.face_swapper.get(frame, faces[i], rep_face[1], paste_back=True)
+                    else: 
+                        #print('\nRun upscale')
+                        bgr_fake, M = self.face_swapper.get(frame, faces[i], rep_face[1], paste_back=False)
+                        frame = self.paste_upscale(bgr_fake,M,frame)
                     del faces[i]
                     break
         return frame
@@ -172,17 +261,46 @@ class Refacer:
         audio_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'audio'), None)
         if audio_stream is not None:
             self.video_has_audio = True
-        
+
+    def __limit_resources(self):
+        # prevent tensorflow memory leak
+        #gpus = tensorflow.config.experimental.list_physical_devices('GPU')
+       # for gpu in gpus:
+           # tensorflow.config.experimental.set_memory_growth(gpu, True)
+        if self.max_memory:
+            memory = self.max_memory * 1024 * 1024 * 1024
+            if str(platform.system()).lower() == 'windows':
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                kernel32.SetProcessWorkingSetSize(-1, ctypes.c_size_t(memory), ctypes.c_size_t(memory))
+            else:
+                import resource
+                resource.setrlimit(resource.RLIMIT_DATA, (memory, memory))
+                 
     def reface_group(self, faces, frames, output):
-        with ThreadPoolExecutor(max_workers = self.use_num_cpus) as executor:
+        with ThreadPoolExecutor(max_workers = self.gpu_threads) as executor:
             if self.first_face:
+                print(f"Задействовано {self.gpu_threads} потоков")
                 results = list(tqdm(executor.map(self.process_first_face, frames), total=len(frames),desc="Processing frames"))
             else:
+                print(f"Задействовано {self.gpu_threads} потоков")
                 results = list(tqdm(executor.map(self.process_faces, frames), total=len(frames),desc="Processing frames"))
             for result in results:
                 output.write(result)
-
-    def reface(self, video_path, faces):
+     
+    def reface(self, video_path, faces, upscaler):
+        self.upscale_en = False
+        if upscaler != 'None': 
+            self.upscale_en = True
+            model_path = osp.join('upscaler_models',upscaler)
+            sess_upsk = rt.InferenceSession(model_path, self.sess_options, providers=self.providers)
+            if 'GFPGAN' in str(upscaler):
+                self.face_upscaler_model = GFPGAN(sess_upsk)
+                #print('\nGFPGAN upscaling.')
+            else:
+                self.face_upscaler_model = ESRGAN(sess_upsk)
+                #print('\nESRGAN upscaling.')        
+        #else: print('\nNot upscaling.')     
         self.__check_video_has_audio(video_path)
         output_video_path = os.path.join('out',Path(video_path).name)
         self.prepare_faces(faces)
@@ -220,10 +338,11 @@ class Refacer:
         output.release()
         
         return self.__convert_video(video_path,output_video_path)
+
     
     def __try_ffmpeg_encoder(self, vcodec):
         print(f"Trying FFMPEG {vcodec} encoder")
-        command = ['ffmpeg', '-y', '-f','lavfi','-i','testsrc=duration=1:size=1280x720:rate=30','-vcodec',vcodec,'testsrc.mp4']
+        command = ['ffmpeg', '-y', "-hwaccel auto", '-f','lavfi','-i','testsrc=duration=1:size=1280x720:rate=30','-vcodec',vcodec,'testsrc.mp4']
         try:
             subprocess.run(command, check=True, capture_output=True).stderr
         except subprocess.CalledProcessError as e:
@@ -235,7 +354,6 @@ class Refacer:
     def __check_encoders(self):
         self.ffmpeg_video_encoder='libx264'
         self.ffmpeg_video_bitrate='0'
-
         pattern = r"encoders: ([a-zA-Z0-9_]+(?: [a-zA-Z0-9_]+)*)"
         command = ['ffmpeg', '-codecs', '--list-encoders']
         commandout = subprocess.run(command, check=True, capture_output=True).stdout
@@ -251,7 +369,6 @@ class Refacer:
                                 self.ffmpeg_video_bitrate=Refacer.VIDEO_CODECS[v_k]
                                 print(f"Video codec for FFMPEG: {self.ffmpeg_video_encoder}")
                                 return
-
     VIDEO_CODECS = {
          'h264_videotoolbox':'0', #osx HW acceleration
          'h264_nvenc':'0', #NVIDIA HW acceleration
