@@ -69,20 +69,20 @@ thresholds = []
 
 with gr.Blocks() as demo:
     with gr.Row():
-        gr.Markdown("# Refacer")
+        gr.Markdown("# Refacer by ba1yya https://www.youtube.com/@ba1yya")
     with gr.Row():
-        video=gr.Video(label="Original video",format="mp4")
-        video2=gr.Video(label="Refaced video",interactive=False,format="mp4")
+        video=gr.Video(label="Оригинальное видео, формат mp4",format="mp4")
+        video2=gr.Video(label="Refaced видео",interactive=False,format="mp4")
 
     for i in range(0,num_faces):
-        with gr.Tab(f"Face #{i+1}"):
+        with gr.Tab(f"Лицо #{i+1}"):
             with gr.Row():
-                origin.append(gr.Image(label="Face to replace"))
-                destination.append(gr.Image(label="Destination face"))
+                origin.append(gr.Image(label="Лицо которое заменяем"))
+                destination.append(gr.Image(label="На какое заменяем"))
             with gr.Row():
-                thresholds.append(gr.Slider(label="Threshold",minimum=0.0,maximum=1.0,value=0.2))
+                thresholds.append(gr.Slider(label="Прозрачность",minimum=0.0,maximum=1.0,value=0.2))
     with gr.Row():
-        button=gr.Button("Reface", variant="primary")
+        button=gr.Button("Начать обработку", variant="primary")
 
     button.click(fn=run,inputs=[video]+origin+destination+thresholds,outputs=[video2])
     
