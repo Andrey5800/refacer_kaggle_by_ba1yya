@@ -76,7 +76,7 @@ with gr.Blocks() as demo:
         video2=gr.Video(label=u"Refaced видео",interactive=False,format="mp4")
 
     for i in range(0,num_faces):
-        with gr.Tab(u"Лицо #{i+1}"):
+        with gr.Tab(u"Лицо #" + f"{i+1}"):
             with gr.Row():
                 origin.append(gr.Image(label=u"Лицо которое заменяем"))
                 destination.append(gr.Image(label=u"На какое заменяем"))
