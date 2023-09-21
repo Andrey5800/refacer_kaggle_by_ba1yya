@@ -7,7 +7,7 @@ import ngrok
 parser = argparse.ArgumentParser(description='Refacer')
 parser.add_argument("--max_num_faces", type=int, help="Max number of faces on UI", default=5)
 parser.add_argument("--force_cpu", help="Force CPU mode", default=False, action="store_true")
-parser.add_argument("--share_gradio", help="Share Gradio", default=True, action="store_true")
+parser.add_argument("--share_gradio", help="Share Gradio", default=False, action="store_true")
 parser.add_argument("--server_name", type=str, help="Server IP address", default="127.0.0.1")
 parser.add_argument("--server_port", type=int, help="Server port", default=7860)
 parser.add_argument("--colab_performance", help="Use in colab for better performance", default=False,action="store_true")
